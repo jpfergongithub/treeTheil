@@ -1,0 +1,28 @@
+year,city,firm,white,black
+1980,New York,A,50,50
+1980,New York,B,75,25
+1980,New York,C,75,25
+1980,Chicago,A,30,30
+1980,Chicago,B,15,60
+1980,Chicago,C,12,3
+1980,Chicago,D,17,4
+1980,Philadelphia,A,100,100
+1980,Philadelphia,B,90,12
+1981,New York,A,55,50
+1981,New York,B,65,35
+1981,New York,C,75,25
+1981,Chicago,A,40,40
+1981,Chicago,B,18,55
+1981,Chicago,C,12,6
+1981,Chicago,D,14,4
+1981,Philadelphia,A,110,90
+1981,Philadelphia,B,100,16
+1982,New York,A,55,50
+1982,New York,B,60,40
+1982,New York,C,75,25
+1982,Chicago,A,44,40
+1982,Chicago,B,19,54
+1982,Chicago,C,12,8
+1982,Chicago,D,12,4
+1982,Philadelphia,A,115,85
+1982,Philadelphia,B,94,12
