@@ -78,7 +78,7 @@ def deepcopy_node_data(tree, fromNode, toNode):
     tree[toNode].data.groups = deepcopy(tree[fromNode].data.groups)
 
 
-def tree_structure(tree, dataframe, levels, datums):
+def tree_structure(tree, dataframe, levels, groups):
     '''Single pass through the dataframe to create the tree structure.
     Works down from the root, passing already-created nodes, and
     assigns the data to the leaf node.
@@ -92,8 +92,8 @@ def tree_structure(tree, dataframe, levels, datums):
         for level in levels:
             level_list.append(str(dataframe[level].iloc[row]))
         leaf_data = {}
-        for datum in datums:
-            leaf_data[datum] = maybefloat(dataframe[datum].iloc[row])
+        for group in groups:
+            leaf_data[group] = maybefloat(dataframe[group].iloc[row])
         for i in range(len(level_list)):
             node_id = '|'.join(level_list[:i+1])
             lunit = level_list[i]
@@ -101,7 +101,8 @@ def tree_structure(tree, dataframe, levels, datums):
             if tree.contains(node_id):
                 pass
             elif i == 0:
-                tree.create_node(node_id, node_id, data=Thile({}, lunit))
+                tree.create_node(node_id, node_id, data=Thile({},
+                                                              lunit))
             elif i == len(level_list)-1:
                 tree.create_node(node_id, node_id, parent=parent_id,
                                  data=Thile(leaf_data, lunit))
@@ -126,9 +127,9 @@ def leaf_up_tree(tree):
                 inc_dict(tree[leaf].data.groups, tree[parent].data.groups)
 
 
-def theilTree(dataframe, levels, datums):
+def theilTree(dataframe, levels, groups):
     tree = Tree()
-    tree_structure(tree, dataframe, levels, datums)
+    tree_structure(tree, dataframe, levels, groups)
     leaf_up_tree(tree)
     return tree
 
@@ -138,25 +139,37 @@ def theilTree(dataframe, levels, datums):
 ########################################################################
 
 
-def node_weight(tree, node):
+def node_weight(tree, nid):
     '''Node's weight as a share of its parent'''
-    return tree[node].data.total() / tree.parent(node).data.total()
+    return tree[nid].data.total() / tree.parent(nid).data.total()
 
 
-def node_entropy(tree, node):
+def node_entdev(tree, nid):
     '''Node's entropy deviation from its parent'''
-    return (0 if tree.parent(node).data.entropy() == 0 else
-            (tree.parent(node).data.entropy() - tree[node].data.entropy()) /
-            tree.parent(node).data.entropy())
+    return (0 if tree.parent(nid).data.entropy() == 0 else
+            (tree.parent(nid).data.entropy() - tree[nid].data.entropy()) /
+            tree.parent(nid).data.entropy())
 
 
-def theil_cmp(tree, node):
+def node_weight_recur(tree, nid):
+    '''Weight of a node in the larger tree, versus weight as a share of
+    its parent.  Calculated upward to tree root.
+
+    '''
+    if tree.level(nid) == 0:
+        return 1
+    else:
+        return node_weight(tree, nid) * \
+            node_weight_recur(tree, tree.parent(nid).identifier)
+
+
+def theil_cmp(tree, nid):
     '''Node's contribution to its parent's Theil statistic. Calculated as
     the node's entropy deviation from its parent, weighted by its size
     as a share of the parent.
 
     '''
-    return node_weight(tree, node) * node_entropy(tree, node)
+    return node_weight(tree, nid) * node_entdev(tree, nid)
 
 
 # Because the data are in a tree structure, one can recur through
@@ -165,47 +178,112 @@ def theil_cmp(tree, node):
 # cannot be segregated.  Letting the recursion terminate with the
 # additive identity spares a lot of conditional branching to test
 # whether nodes are leaves.
-def theil(tree, unit, levels):
+def theil(tree, nid, recursions):
     '''Size-weighted sum of entropy deviations of a parent's children.
 
     '''
     the_theil = 0
-    if levels == 0:
-        for subunit in tree.children(unit):
-            the_theil += theil_cmp(tree, subunit.identifier)
+    if recursions == 0:
+        for child in tree.children(nid):
+            the_theil += theil_cmp(tree, child.identifier)
     else:
-        for subunit in tree.children(unit):
-            the_theil += theil_cmp(tree, subunit.identifier)
-            sub_weight = subunit.data.total() / tree[unit].data.total()
-            the_theil += sub_weight * theil(tree, subunit.identifier,
-                                            levels - 1)
+        for child in tree.children(nid):
+            the_theil += theil_cmp(tree, child.identifier)
+            the_theil += node_weight(tree, child.identifier) * \
+                theil(tree, child.identifier, recursions - 1)
     return the_theil
 
 
-def btw_theil(tree, unit):
+def btw_theil(tree, nid):
     '''Between-child component of a parent's Theil statistic.'''
-    return theil(tree, unit, 0)
+    return theil(tree, nid, 0)
 
 
-# This version doesn't allow recursive Theils on the within
-# component. Come back to that.
-def win_theil(tree, sub_unit):
+def win_theil(tree, child, recursions):
     '''Within-child component of a parent's Theil statistic.  Called on a
-    specific child.
+    specific child.  Allows recursion on the within-component Theil.
 
     '''
-    return btw_theil(tree, sub_unit) * node_weight(tree, sub_unit)
+    return theil(tree, child, recursions) * node_weight(tree, child)
 
 
-# This assumes that the lunit in question is on level 2. Come back to
-# that.
-def cross_theil(tree, lunit):
-    cross_theil = 0
-    for node in tree.all_nodes():
-        if tree[node.identifier].data.lunit == lunit:
-            cross_theil += (theil_cmp(tree, node.identifier) *
-                            node_weight(tree,
-                                        tree.parent(node.identifier).identifier))
-        else:
-            pass
-    return cross_theil
+def xwin_theil(tree, lunit):
+    '''Within-child component of a tree's Theil statistic, but calculated
+    on a set of nodes with a common lunit attribute rather than on a
+    set of nodes that share a parent.  Automatically gives results for
+    the root of the tree by recursively weighting each node's entropy
+    deviation.
+
+    It makes sense to calculate at the level of the tree root because
+    this functions assumes you want to violate the tree hierarchy.  If
+    you want to do such calculations for different levels, it makes
+    more sense to build the tree differently.
+
+    '''
+    xwin_theil = 0
+    for node in tree.filter_nodes(lambda n: n.data.lunit == lunit):
+        xwin_theil += (node_entdev(tree, node.identifier) *
+                       node_weight_recur(tree, node.identifier))
+    return xwin_theil
+
+
+def mtree_stage(mtree, nid):
+    '''Returns the 1th element of the node ID which, in a multi-tree,
+    identifies the tree within the multi-tree.
+
+    '''
+    return list(mtree[nid].identifier.split('|'))[1]
+
+
+def mtree_nid(mtree, nid):
+    '''Returns the 2th and subsequent elements of the node ID. '''
+    return '|'.join(list(mtree[nid].identifier.split('|'))[2:])
+
+
+def mtree_root(mtree, nid):
+    '''Returns the 0th element of the node ID, i.e., the root.'''
+    return list(mtree[nid].identifier.split('|'))[0]
+
+
+def change_comps(mtree, nid):
+    '''Analyzes changes in a node's Thiel component into segregation and
+    population effects.  Defined on a multitree, where each major
+    branch off of root is a year or other relevant stage.
+
+    In the notation used here, E is node entropy, e is node entropy
+    deviation from its parent, w is node size, and p is node weight; j
+    indexes child nodes.
+
+    '''
+    Ej_new = mtree[nid].data.entropy()
+    E_new = mtree.parent(nid).data.entropy()
+    wj_new = mtree[nid].data.total()
+    w_new = mtree.parent(nid).data.total()
+
+    oldnid = '|'.join([mtree_root(mtree, nid),
+                       str(int(mtree_stage(mtree, nid)) - 1),
+                       mtree_nid(mtree, nid)])
+
+    Ej = mtree[oldnid].data.entropy()
+    E = mtree.parent(oldnid).data.entropy()
+    wj = mtree[oldnid].data.total()
+    w = mtree.parent(oldnid).data.total()
+    pj = node_weight(mtree, oldnid)
+    ej = node_entdev(mtree, oldnid)
+
+    dotE = E_new - E
+    dotEj = Ej_new - Ej
+    dotwj = wj_new - wj
+    dotw = w_new - w
+
+    seg_comp = pj * ((dotE * Ej - E * dotEj)/(E * (E + dotE)))
+    pop_comp = pj * (ej * ((dotwj/wj) - (dotw/w)))
+    return seg_comp, pop_comp
+
+
+# This is wrong, because you can't += tuples. Come back to it.
+def theil_changes(tree, nid):
+    theil_changes = 0
+    for child in tree.children(nid):
+        theil_changes += change_comps(tree, child.identifier)
+    return theil_changes
