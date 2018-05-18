@@ -78,6 +78,115 @@ def deepcopy_node_data(tree, fromNode, toNode):
     tree[toNode].data.groups = deepcopy(tree[fromNode].data.groups)
 
 
+tree = Tree()
+tree.create_node(0, 0)
+
+a = time.time()
+for year in bar.year.unique():
+    nid = '0|%s' % year
+    tree.create_node(nid, nid, parent=0)
+print('Created years: %s' % (time.time() -a))
+
+a = time.time()
+for name, group in bar.groupby('year'):
+    pid = '0|%s' % name
+    for fipscounty in group.fipscounty.unique():
+        nid = '%s|%s' % (pid, fipscounty)
+        tree.create_node(nid, nid, parent=pid)
+print('Created counties: %s' % (time.time() -a))
+
+a = time.time()
+for name, group in bar.groupby(['year', 'fipscounty']):
+    pid = '0|%s|%s' % (name[0], name[1])
+    for sic_division in group.sic_division.unique():
+        nid = '%s|%s' % (pid, sic_division)
+        tree.create_node(nid, nid, parent=pid)
+print('Created sectors: %s' % (time.time() -a))
+
+a = time.time()
+for name, group in bar.groupby(['year', 'fipscounty', 'sic_division']):
+    pid = '0|%s|%s|%s' % (name[0], name[1], name[2])
+    for establishment in group.establishment.unique():
+        nid = '%s|%s' % (pid, establishment)
+        tree.create_node(nid, nid, parent=pid)
+print('Created ests: %s' % (time.time() -a))
+
+
+def newish_tree(dataframe, root, levels):
+    tree = Tree()
+    tree.create_node(root, root)
+    groupby_list = []
+    build_branches(tree, dataframe, root, levels, groupby_list)
+    return tree
+
+
+def build_branches(tree, dataframe, root, levels, groupby_list):
+    if levels == []:
+        return tree
+    else:
+        this_level = levels.pop()
+        if groupby_list == []:
+            for item in dataframe[this_level].unique():
+                nid = '%s|%s' % (root, item)
+                tree.create_node(nid, nid, parent=root)
+            groupby_list.append(this_level)
+            build_branches(tree, dataframe, root, levels, groupby_list)
+        else:
+            for group, subdf in dataframe.groupby(groupby_list):
+                pid = root
+                if len(groupby_list) == 1:
+                    pid += '|%s' % group
+                else:
+                    for element in group:
+                        pid += '|%s' % element
+                for item in subdf[this_level].unique():
+                    nid = '%s|%s' % (pid, item)
+                    tree.create_node(nid, nid, parent=pid)
+            groupby_list.append(this_level)
+            build_branches(tree, dataframe, root, levels, groupby_list)
+
+
+def make_leaf_data(dataframe, root, levels, groups):
+    idlist = []
+    for row in range(len(dataframe)):
+        nid = root
+        lunit = dataframe[levels[-1]].iloc[row]
+        for level in levels:
+            nid += '|%s' % dataframe[level].iloc[row]
+        idlist.append([nid,
+                       {group: dataframe[group].iloc[row] for group in groups},
+                       lunit])
+    return idlist
+
+
+def add_leaf_data(tree, idlist):
+    for i in range(len(tree.leaves())):
+        tree[idlist[i][0]].data = Thile(idlist[i][1], idlist[i][2])
+
+
+# If I want to get a dictionary:
+# levels = ['white', 'black'] say...
+# for row in range(len(df)):
+#    print({level: df[level].iloc[row] for level in levels})
+# Now I'm creating a list of ids and data packages
+# for row in range(len(baz)):
+#    smee = '0'
+#    for level in levels:
+#        smee += '|%s' % baz[level].iloc[row]
+#    idlist.append([smee, {group: baz[group].iloc[row] for group in groups}])
+
+idlist = []
+for row in range(len(baz)):
+    smee = '0'
+#    lowlevel = levels[-1]
+    lunit = baz[levels[-1]].iloc[row]
+    for level in levels:
+        smee += '|%s' % baz[level].iloc[row]
+    idlist.append([smee, {group: baz[group].iloc[row] for group in groups}, lunit])
+for i in range(len(tree.leaves())):
+    tree[idlist[i][0]].data = Thile(idlist[i][1], idlist[i][2])
+
+
 def tree_structure(tree, dataframe, levels, groups):
     '''Single pass through the dataframe to create the tree structure.
     Works down from the root, passing already-created nodes, and
@@ -141,7 +250,14 @@ def theilTree(dataframe, levels, groups):
 
 def node_weight(tree, nid):
     '''Node's weight as a share of its parent'''
-    return tree[nid].data.total() / tree.parent(nid).data.total()
+    return (0 if tree.parent(nid).data.total() == 0 else
+            tree[nid].data.total() / tree.parent(nid).data.total())
+
+
+def node_diversity(tree, nid):
+    '''Node's diversity relative to its parent'''
+    return (0 if tree.parent(nid).data.entropy() == 0 else
+            tree[nid].data.entropy() / tree.parent(nid).data.entropy())
 
 
 def node_entdev(tree, nid):
@@ -161,6 +277,18 @@ def node_weight_recur(tree, nid):
     else:
         return node_weight(tree, nid) * \
             node_weight_recur(tree, tree.parent(nid).identifier)
+
+
+def node_diversity_recur(tree, nid):
+    '''Relative diversity of a node in the larger tree, versus diversity
+    relative to its parent.  Calculated upward to tree root.
+
+    '''
+    if tree.level(nid) == 0:
+        return 1
+    else:
+        return node_diversity(tree, nid) * \
+            node_diversity_recur(tree, tree.parent(nid).identifier)
 
 
 def theil_cmp(tree, nid):
@@ -190,6 +318,7 @@ def theil(tree, nid, recursions):
         for child in tree.children(nid):
             the_theil += theil_cmp(tree, child.identifier)
             the_theil += node_weight(tree, child.identifier) * \
+                node_diversity(tree, child.identifier) * \
                 theil(tree, child.identifier, recursions - 1)
     return the_theil
 
@@ -199,12 +328,13 @@ def btw_theil(tree, nid):
     return theil(tree, nid, 0)
 
 
-def win_theil(tree, child, recursions):
+def win_theil(tree, child_nid, recursions):
     '''Within-child component of a parent's Theil statistic.  Called on a
     specific child.  Allows recursion on the within-component Theil.
 
     '''
-    return theil(tree, child, recursions) * node_weight(tree, child)
+    return theil(tree, child_nid, recursions) * \
+        node_weight(tree, child_nid) * node_diversity(tree, child_nid)
 
 
 def xwin_theil(tree, lunit):
@@ -223,7 +353,8 @@ def xwin_theil(tree, lunit):
     xwin_theil = 0
     for node in tree.filter_nodes(lambda n: n.data.lunit == lunit):
         xwin_theil += (node_entdev(tree, node.identifier) *
-                       node_weight_recur(tree, node.identifier))
+                       node_weight_recur(tree, node.identifier) *
+                       node_diversity_recur(tree, node.identifier))
     return xwin_theil
 
 
