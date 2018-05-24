@@ -78,146 +78,30 @@ def deepcopy_node_data(tree, fromNode, toNode):
     tree[toNode].data.groups = deepcopy(tree[fromNode].data.groups)
 
 
-tree = Tree()
-tree.create_node(0, 0)
-
-a = time.time()
-for year in bar.year.unique():
-    nid = '0|%s' % year
-    tree.create_node(nid, nid, parent=0)
-print('Created years: %s' % (time.time() -a))
-
-a = time.time()
-for name, group in bar.groupby('year'):
-    pid = '0|%s' % name
-    for fipscounty in group.fipscounty.unique():
-        nid = '%s|%s' % (pid, fipscounty)
-        tree.create_node(nid, nid, parent=pid)
-print('Created counties: %s' % (time.time() -a))
-
-a = time.time()
-for name, group in bar.groupby(['year', 'fipscounty']):
-    pid = '0|%s|%s' % (name[0], name[1])
-    for sic_division in group.sic_division.unique():
-        nid = '%s|%s' % (pid, sic_division)
-        tree.create_node(nid, nid, parent=pid)
-print('Created sectors: %s' % (time.time() -a))
-
-a = time.time()
-for name, group in bar.groupby(['year', 'fipscounty', 'sic_division']):
-    pid = '0|%s|%s|%s' % (name[0], name[1], name[2])
-    for establishment in group.establishment.unique():
-        nid = '%s|%s' % (pid, establishment)
-        tree.create_node(nid, nid, parent=pid)
-print('Created ests: %s' % (time.time() -a))
-
-
-def newish_tree(dataframe, root, levels):
-    tree = Tree()
-    tree.create_node(root, root)
-    groupby_list = []
-    build_branches(tree, dataframe, root, levels, groupby_list)
-    return tree
-
-
-def build_branches(tree, dataframe, root, levels, groupby_list):
-    if levels == []:
-        return tree
-    else:
-        this_level = levels.pop()
-        if groupby_list == []:
-            for item in dataframe[this_level].unique():
-                nid = '%s|%s' % (root, item)
-                tree.create_node(nid, nid, parent=root)
-            groupby_list.append(this_level)
-            build_branches(tree, dataframe, root, levels, groupby_list)
-        else:
-            for group, subdf in dataframe.groupby(groupby_list):
-                pid = root
-                if len(groupby_list) == 1:
-                    pid += '|%s' % group
-                else:
-                    for element in group:
-                        pid += '|%s' % element
-                for item in subdf[this_level].unique():
-                    nid = '%s|%s' % (pid, item)
-                    tree.create_node(nid, nid, parent=pid)
-            groupby_list.append(this_level)
-            build_branches(tree, dataframe, root, levels, groupby_list)
-
-
-def make_leaf_data(dataframe, root, levels, groups):
-    idlist = []
-    for row in range(len(dataframe)):
-        nid = root
-        lunit = dataframe[levels[-1]].iloc[row]
-        for level in levels:
-            nid += '|%s' % dataframe[level].iloc[row]
-        idlist.append([nid,
-                       {group: dataframe[group].iloc[row] for group in groups},
-                       lunit])
-    return idlist
-
-
-def add_leaf_data(tree, idlist):
-    for i in range(len(tree.leaves())):
-        tree[idlist[i][0]].data = Thile(idlist[i][1], idlist[i][2])
-
-
-# If I want to get a dictionary:
-# levels = ['white', 'black'] say...
-# for row in range(len(df)):
-#    print({level: df[level].iloc[row] for level in levels})
-# Now I'm creating a list of ids and data packages
-# for row in range(len(baz)):
-#    smee = '0'
-#    for level in levels:
-#        smee += '|%s' % baz[level].iloc[row]
-#    idlist.append([smee, {group: baz[group].iloc[row] for group in groups}])
-
-idlist = []
-for row in range(len(baz)):
-    smee = '0'
-#    lowlevel = levels[-1]
-    lunit = baz[levels[-1]].iloc[row]
-    for level in levels:
-        smee += '|%s' % baz[level].iloc[row]
-    idlist.append([smee, {group: baz[group].iloc[row] for group in groups}, lunit])
-for i in range(len(tree.leaves())):
-    tree[idlist[i][0]].data = Thile(idlist[i][1], idlist[i][2])
-
-
-def tree_structure(tree, dataframe, levels, groups):
-    '''Single pass through the dataframe to create the tree structure.
-    Works down from the root, passing already-created nodes, and
-    assigns the data to the leaf node.
+def tree_structure(tree, csvdict, root, levels, groups):
+    '''Single pass through the dataframe to create the tree. Works down
+    from the root, passing already-created nodes, and assigns the data
+    to the leaf node.
 
     Node IDs concatenate values for the different levels (joined by
     pipe characters), starting from the root.
 
     '''
-    for row in range(len(dataframe)):
-        level_list = []
-        for level in levels:
-            level_list.append(str(dataframe[level].iloc[row]))
-        leaf_data = {}
-        for group in groups:
-            leaf_data[group] = maybefloat(dataframe[group].iloc[row])
-        for i in range(len(level_list)):
-            node_id = '|'.join(level_list[:i+1])
-            lunit = level_list[i]
-            parent_id = '|'.join(level_list[:i])
-            if tree.contains(node_id):
+    tree.create_node(root, root, data=Thile({}, root))
+    for row in csvdict:
+        nid = root
+        leaf_data = {group: float(row[group]) for group in groups}
+        for i in range(len(levels)):
+            pid = nid
+            nid += '|%s' % row[levels[i]]
+            lunit = row[levels[i]]
+            if tree.contains(nid):
                 pass
-            elif i == 0:
-                tree.create_node(node_id, node_id, data=Thile({},
-                                                              lunit))
-            elif i == len(level_list)-1:
-                tree.create_node(node_id, node_id, parent=parent_id,
+            elif i == len(levels)-1:
+                tree.create_node(nid, nid, parent=pid,
                                  data=Thile(leaf_data, lunit))
             else:
-                tree.create_node(node_id, node_id, parent=parent_id,
-                                 data=Thile({}, lunit))
+                tree.create_node(nid, nid, parent=pid, data=Thile({}, lunit))
 
 
 def leaf_up_tree(tree):
@@ -236,9 +120,9 @@ def leaf_up_tree(tree):
                 inc_dict(tree[leaf].data.groups, tree[parent].data.groups)
 
 
-def theilTree(dataframe, levels, groups):
+def theilTree(csvdict, root, levels, groups):
     tree = Tree()
-    tree_structure(tree, dataframe, levels, groups)
+    tree_structure(tree, csvdict, root, levels, groups)
     leaf_up_tree(tree)
     return tree
 
@@ -328,13 +212,20 @@ def btw_theil(tree, nid):
     return theil(tree, nid, 0)
 
 
-def win_theil(tree, child_nid, recursions):
+def win_theil_cmp(tree, child_nid, recursions):
     '''Within-child component of a parent's Theil statistic.  Called on a
     specific child.  Allows recursion on the within-component Theil.
 
     '''
     return theil(tree, child_nid, recursions) * \
         node_weight(tree, child_nid) * node_diversity(tree, child_nid)
+
+
+def win_theils(tree, nid, recursions):
+    win_theils = 0
+    for child in tree.children(nid):
+        win_theils += win_theil_cmp(tree, child, recursions)
+    return win_theils
 
 
 def xwin_theil(tree, lunit):
@@ -418,3 +309,96 @@ def theil_changes(tree, nid):
     for child in tree.children(nid):
         theil_changes += change_comps(tree, child.identifier)
     return theil_changes
+
+
+# def newish_tree(dataframe, root, levels):
+#     tree = Tree()
+#     tree.create_node(root, root)
+#     groupby_list = []
+#     build_branches(tree, dataframe, root, levels, groupby_list)
+#     return tree
+
+
+# def build_branches(tree, dataframe, root, levels, groupby_list):
+#     if levels == []:
+#         return tree
+#     else:
+#         this_level = levels.pop()
+#         if groupby_list == []:
+#             for item in dataframe[this_level].unique():
+#                 nid = '%s|%s' % (root, item)
+#                 tree.create_node(nid, nid, parent=root)
+#             groupby_list.append(this_level)
+#             build_branches(tree, dataframe, root, levels, groupby_list)
+#         else:
+#             for group, subdf in dataframe.groupby(groupby_list):
+#                 pid = root
+#                 if len(groupby_list) == 1:
+#                     pid += '|%s' % group
+#                 else:
+#                     for element in group:
+#                         pid += '|%s' % element
+#                 for item in subdf[this_level].unique():
+#                     nid = '%s|%s' % (pid, item)
+#                     if levels == []:
+#                         tree.create_node(nid, nid, parent=pid,
+#                                          data=subdf[subdf[this_level] == item])
+#                     else:
+#                         tree.create_node(nid, nid, parent=pid)
+#             groupby_list.append(this_level)
+#             build_branches(tree, dataframe, root, levels, groupby_list)
+
+# def make_leaf_data(dataframe, root, levels, groups):
+#     idlist = []
+#     for row in range(len(dataframe)):
+#         nid = root
+#         lunit = dataframe[levels[-1]].iloc[row]
+#         for level in levels:
+#             nid += '|%s' % dataframe[level].iloc[row]
+#         idlist.append([nid,
+#                        {group: dataframe[group].iloc[row] for group in groups},
+#                        lunit])
+#     return idlist
+
+
+# def add_leaf_data(tree, idlist):
+#     for i in range(len(tree.leaves())):
+#         tree[idlist[i][0]].data = Thile(idlist[i][1], idlist[i][2])
+
+
+# def tree_structure(tree, dataframe, levels, groups):
+#     '''Single pass through the dataframe to create the tree structure.
+#     Works down from the root, passing already-created nodes, and
+#     assigns the data to the leaf node.
+
+#     Node IDs concatenate values for the different levels (joined by
+#     pipe characters), starting from the root.
+
+#     '''
+#     i = 0
+#     for row in range(len(dataframe)):
+#         if i % 100000 == 0:
+#             print('Did row %s' % i)
+#         else:
+#             pass
+#         level_list = []
+#         for level in levels:
+#             level_list.append(str(dataframe[level].iloc[row]))
+#         leaf_data = {}
+#         for group in groups:
+#             leaf_data[group] = maybefloat(dataframe[group].iloc[row])
+#         for i in range(len(level_list)):
+#             node_id = '|'.join(level_list[:i+1])
+#             lunit = level_list[i]
+#             parent_id = '|'.join(level_list[:i])
+#             if tree.contains(node_id):
+#                 pass
+#             elif i == 0:
+#                 tree.create_node(node_id, node_id, data=Thile({},
+#                                                               lunit))
+#             elif i == len(level_list)-1:
+#                 tree.create_node(node_id, node_id, parent=parent_id,
+#                                  data=Thile(leaf_data, lunit))
+#             else:
+#                 tree.create_node(node_id, node_id, parent=parent_id,
+#                                  data=Thile({}, lunit))
